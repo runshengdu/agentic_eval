@@ -155,7 +155,6 @@ def react_answer(question: str, model: Optional[str] = None, provider: Optional[
     safe_model_id = re.sub(r'[<>:"/\\|?*]+', '-', model_id)
     log_filename = os.path.join(log_dir, f"{safe_model_id}_{timestamp}.json")
     log_data: List[Dict] = []
-    # Restore legacy log structure: record user query immediately
     log_data.append({"type": "user_query", "content": question.strip()})
     logger.info("[USER_QUERY] %s", question.strip())
     
@@ -178,9 +177,9 @@ def react_answer(question: str, model: Optional[str] = None, provider: Optional[
                 pass
             return "已达到 token 预算阈值，停止继续对话。"
         
-        # 调用 LLM
+        # Call the LLM for the next step
         reply, usage = call_llm(oa_client, messages, model=model, provider=provider)
-        # 解析回复并获取所有标签
+        # Parse the reply and extract all tags
         kind, payload, all_tags = parse_agent_reply(reply)
         
         # Compute step total tokens for budget enforcement using provider-reported usage
@@ -220,7 +219,6 @@ def react_answer(question: str, model: Optional[str] = None, provider: Optional[
             idx = pending_summary.get("message_index")
             if isinstance(idx, int) and 0 <= idx < len(messages):
                 messages[idx]["content"] = f"Observation:\n{summarized}"
-            # 恢复旧式日志：记录已应用的摘要
             log_data.append({
                 "type": "summary_applied",
                 "observation": summarized,
@@ -231,12 +229,11 @@ def react_answer(question: str, model: Optional[str] = None, provider: Optional[
             pending_summary = None
 
         if kind == "plan" and isinstance(payload, str):
-            # 已记录 PLAN；Plan标签不是动作，继续循环等待动作标签
+            # PLAN recorded; plan is not an action, continue waiting for an action tag
             messages.append({"role": "assistant", "content": reply})
             messages.append({"role": "user", "content": "Please provide your next action: <search>, <access>, or <answer>."})
             continue
         elif kind == "answer" and isinstance(payload, str):
-            # 记录最终答案并保存日志（旧版结构）
             log_data.append({"type": "answer", "content": payload})
             logger.info("[ANSWER] %s", payload)
             try:
@@ -286,7 +283,6 @@ def react_answer(question: str, model: Optional[str] = None, provider: Optional[
             logger.info("[ACCESS] %s", url_display)
             log_data.append({"type": "access", "url": url_display})
             obs_block = f"\n[Access]\nURL: {url_display}\n{raw_text}\n"
-            # 恢复旧式日志：记录访问原始观察
             log_data.append({
                 "type": "access_observation_raw",
                 "url": url_display,
