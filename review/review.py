@@ -27,7 +27,6 @@ def _safe_model_id_from_filename(filename: str) -> str:
 
 def load_eval_map(csv_path: str) -> Dict[str, str]:
     """Load problem->answer map from the BrowseComp decoded CSV.
-
     Assumes headers include 'problem' and 'answer'.
     """
     import csv
@@ -191,31 +190,28 @@ def run_reviewer() -> None:
     log_dir = os.path.join(cwd, "log")
     out_dir = os.path.join(cwd, "review")
     csv_path = os.path.join(eval_dir, "browse_comp_test_set_decoded.csv")
-    model_name = "glm-4.6"
+    # Configure OpenAI model via env var; defaults to a fast, capable model
+    model_name = "gpt-5"
 
     os.makedirs(out_dir, exist_ok=True)
 
     # Load expected answers
     eval_map = load_eval_map(csv_path)
 
-    # GLM provider via unified OpenAI-compatible path
-    # 本地解耦的 GLM 客户端调用（开启思考模式）
-    def _call_glm(messages: List[Dict[str, str]], model: str) -> Tuple[str, Optional[Dict[str, int]]]:
-        api_key = os.getenv("GLM_API_KEY")
-        if not api_key:
-            raise RuntimeError("GLM_API_KEY 未设置，请在 .env 或环境变量中配置")
-        client = OpenAI(api_key=api_key, base_url="https://open.bigmodel.cn/api/paas/v4/")
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            extra_body={
-                "thinking": {
-                    "type": "enabled",
-                }
-            },
-            temperature=0.0,
-        )
-        content = resp.choices[0].message.content or ""
+    # OpenAI provider via official API
+    def _call_openai(messages: List[Dict[str, str]], model: str) -> Tuple[str, Optional[Dict[str, int]]]:
+        try:
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url="https://api.openai.com/v1")
+            raw_resp = client.chat.completions.with_raw_response.create(
+                model=model,
+                messages=messages,
+            )
+        except Exception as e:
+            raise SystemExit(f"Error: LLM API request failed: {e}")
+        # Parse structured response and validate content
+        resp = raw_resp.parse()
+        msg = resp.choices[0].message
+        content = (getattr(msg, "content", None) or "").strip()
         u = getattr(resp, "usage", None)
         usage: Optional[Dict[str, int]] = None
         if u:
@@ -262,7 +258,7 @@ def run_reviewer() -> None:
             user_query=user_query,
         )
         try:
-            judge_content, _jusage = _call_glm(judge_messages, model=model_name)
+            judge_content, _jusage = _call_openai(judge_messages, model=model_name)
             normalized = (judge_content or "").strip().upper()
             if normalized == "CORRECT":
                 review_obj = {"model_id": model_id, "user_query": user_query, "review": "CORRECT"}
@@ -282,7 +278,7 @@ def run_reviewer() -> None:
             full_log=entries,
         )
         try:
-            content, _usage = _call_glm(messages, model=model_name)
+            content, _usage = _call_openai(messages, model=model_name)
             review_obj = {"model_id": model_id, "user_query": user_query, "review": content}
         except Exception as e:
             review_obj = {"model_id": model_id, "user_query": user_query, "review": f"LLM review failed: {e}"}
