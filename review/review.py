@@ -54,17 +54,17 @@ def read_log_file(path: str) -> List[Dict]:
 def extract_log_summary(log_entries: List[Dict]) -> Tuple[Optional[str], Optional[str]]:
     """Get (user_query, final_answer) from legacy-style log entries."""
     user_query: Optional[str] = None
-    final_answer: Optional[str] = None
+    answer: Optional[str] = None
     for it in log_entries:
         t = (it.get("type") or "").lower()
         if t == "user_query" and not user_query:
             user_query = (it.get("content") or "").strip()
-        elif t == "final" and not final_answer:
-            final_answer = (it.get("content") or "").strip()
+        elif t == "answer" and not answer:
+            answer = (it.get("content") or "").strip()
         # Early exit if both found
-        if user_query and final_answer:
+        if user_query and answer:
             break
-    return user_query, final_answer
+    return user_query, answer
 
 
 def build_reviewer_messages(
@@ -81,8 +81,8 @@ def build_reviewer_messages(
     system_prompt = (
         "You are an expert evaluator reviewing browsing-agent test logs. "
         "Provide very detailed and deep analysis of the browsing-agent's performance. "
-        "you should focus on the agent planning trajectory and analysis why it fails to get the expected answer. "
-        "Return only an analysis text (no JSON), covering:\n"
+        "you should focus on the agent planning or thought trajectory and analysis why it fails to get the expected answer. "
+        "Return only an analysis text, covering:\n"
         "- Whether the final answer matches the expected answer (and why).\n"
         "- If incorrect, a detailed failure analysis.\n"
         "- Concrete citations to log content; no generalities.\n"
@@ -141,6 +141,15 @@ def _list_json_files(dir_path: str) -> List[str]:
         ]
     except Exception:
         return []
+
+
+def _get_log_keywords() -> List[str]:
+    """Resolve log filename filter keywords from env.
+
+    Reads comma-separated `REVIEW_LOG_KEYWORDS` from environment/.env.
+    """
+    raw = os.getenv("REVIEW_LOG_KEYWORDS", "").strip()
+    return [s.strip().lower() for s in raw.split(",") if s.strip()]
 
 
 def _find_log_by_query(log_dir: str, query: str) -> List[Dict]:
@@ -221,8 +230,16 @@ def run_reviewer() -> None:
         raise SystemExit(f"Error: CSV not found at {csv_path}.")
 
     log_json_files = _list_json_files(log_dir)
+    # Filter to only logs whose filenames contain any configured keywords
+    keywords = _get_log_keywords()
+    log_json_files = [
+        p for p in log_json_files
+        if any(k in os.path.basename(p).lower() for k in keywords)
+    ]
     if not log_json_files:
-        raise SystemExit(f"Error: no log JSON files found in {log_dir}.")
+        raise SystemExit(
+            f"Error: no log JSON files in {log_dir} matching keywords: {', '.join(keywords)}."
+        )
 
     # Review directly from logs
     for log_path in sorted(log_json_files):
