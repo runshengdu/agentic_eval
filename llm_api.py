@@ -4,53 +4,45 @@ import time
 from typing import Dict, List, Optional, Tuple
 from anthropic import AnthropicBedrock
 from openai import OpenAI
-from dotenv import dotenv_values
+from dotenv import load_dotenv
+load_dotenv(override=True)
 
 logger = logging.getLogger("react_agent")
 
 def make_anthropic_bedrock_client() -> AnthropicBedrock:
     """Initialize Anthropic Bedrock client using standard AWS envs."""
-    access_key = os.getenv("aws_access_key")
-    secret_key = os.getenv("aws_secret_key")
-    region = "us-east-1"
-
-    kwargs: Dict[str, str] = {"aws_region": region}
-    kwargs["aws_access_key"] = access_key
-    kwargs["aws_secret_key"] = secret_key
-
+    kwargs["aws_region"] = "us-east-1"
+    kwargs["aws_access_key"] = os.environ["aws_access_key"]
+    kwargs["aws_secret_key"] = os.environ["aws_secret_key"]
     return AnthropicBedrock(**kwargs)
 
-def _env_config() -> Dict[str, Optional[str]]:
-    return dotenv_values(os.path.join(os.path.dirname(__file__), ".env"))
-
 def make_openai_compatible_client(provider: str) -> OpenAI:
-    cfg = _env_config()
     provider = provider.lower()
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     if provider == "openai":
-        api_key = cfg.get("OPENAI_API_KEY")
+        api_key = os.environ["OPENAI_API_KEY"]
         base_url = "https://api.openai.com/v1"
     elif provider == "gemini":
-        api_key = cfg.get("GEMINI_API_KEY")
+        api_key = os.environ["GEMINI_API_KEY"]
         base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
     elif provider == "moonshot":
-        api_key = cfg.get("MOONSHOT_API_KEY")
+        api_key = os.environ["MOONSHOT_API_KEY"]
         base_url = "https://api.moonshot.ai/v1"
     elif provider == "qwen":
-        api_key = cfg.get("DASHSCOPE_API_KEY")
+        api_key = os.environ["DASHSCOPE_API_KEY"]
         base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     elif provider == "glm":
-        api_key = cfg.get("GLM_API_KEY")
+        api_key = os.environ["GLM_API_KEY"]
         base_url = "https://open.bigmodel.cn/api/paas/v4"
     elif provider == "openrouter":
-        api_key = cfg.get("OPENROUTER_API_KEY")
+        api_key = os.environ["OPENROUTER_API_KEY"]
         base_url = "https://openrouter.ai/api/v1"
     elif provider == "deepseek":
-        api_key = cfg.get("DEEPSEEK_API_KEY")
+        api_key = os.environ["DEEPSEEK_API_KEY"]
         base_url = "https://api.deepseek.com"
     elif provider == "xai":
-        api_key = cfg.get("XAI_API_KEY")
+        api_key = os.environ["XAI_API_KEY"]
         base_url = "https://api.x.ai/v1"
     return OpenAI(api_key=api_key, base_url=base_url)
 

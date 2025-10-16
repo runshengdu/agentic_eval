@@ -74,7 +74,6 @@ def build_reviewer_messages(
     full_log: List[Dict],
 ) -> List[Dict[str, str]]:
     """Compose messages for full analysis (only when quick judge is not CORRECT).
-
     The model returns plain analysis text; no JSON from the model is required.
     """
     system_prompt = (
@@ -169,6 +168,8 @@ def _write_review(out_dir: str, base_name: str, review_obj: Dict[str, str]) -> N
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(review_obj, f, ensure_ascii=False, indent=2)
         logger.info("Wrote review: %s", out_path)
+        logger.info("token usage: %s", review_obj.get("token_usage"))
+        logger.info("___"*50)
     except Exception as e:
         logger.error("Failed to write review %s: %s", out_path, e)
 
@@ -261,11 +262,11 @@ def run_reviewer() -> None:
             judge_content, _jusage = _call_openai(judge_messages, model=model_name)
             normalized = (judge_content or "").strip().upper()
             if normalized == "CORRECT":
-                review_obj = {"model_id": model_id, "user_query": user_query, "review": "CORRECT"}
+                review_obj = {"model_id": model_id, "user_query": user_query, "review": "CORRECT", "token_usage": _jusage}
                 _write_review(out_dir, os.path.splitext(os.path.basename(log_path))[0], review_obj)
                 continue
         except Exception as e:
-            review_obj = {"model_id": model_id, "user_query": user_query, "review": f"LLM quick judge failed: {e}"}
+            review_obj = {"model_id": model_id, "user_query": user_query, "review": f"LLM quick judge failed: {e}", "token_usage": None}
             _write_review(out_dir, os.path.splitext(os.path.basename(log_path))[0], review_obj)
             continue
 
@@ -279,9 +280,9 @@ def run_reviewer() -> None:
         )
         try:
             content, _usage = _call_openai(messages, model=model_name)
-            review_obj = {"model_id": model_id, "user_query": user_query, "review": content}
+            review_obj = {"model_id": model_id, "user_query": user_query, "review": content, "token_usage": _usage}
         except Exception as e:
-            review_obj = {"model_id": model_id, "user_query": user_query, "review": f"LLM review failed: {e}"}
+            review_obj = {"model_id": model_id, "user_query": user_query, "review": f"LLM review failed: {e}", "token_usage": None}
         _write_review(out_dir, os.path.splitext(os.path.basename(log_path))[0], review_obj)
     return
 

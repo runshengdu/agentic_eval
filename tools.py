@@ -1,15 +1,13 @@
 import logging
 from typing import List, Union
 from tavily import TavilyClient  
+import os
+from dotenv import load_dotenv
+load_dotenv(override=True)
 logger = logging.getLogger("react_agent")
 
 def make_tavily_client() -> "TavilyClient":
-    if TavilyClient is None:
-        raise RuntimeError(
-            "The 'tavily-python' package is not installed. Please run: pip install -r requirements.txt"
-        )
-    # Key is read from env by TavilyClient; we validate existence upstream to avoid leaking secrets here.
-    return TavilyClient()
+    return TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
 
 
 def tavily_search(client: "TavilyClient", query: str, max_results: int = 5) -> str:
@@ -21,12 +19,13 @@ def tavily_search(client: "TavilyClient", query: str, max_results: int = 5) -> s
     url (per result)
     """
     logger.debug("TOOL CALL: name=Tavily.search params=%s", {"query": query, "max_results": max_results})
-
-    try:
-        raw = client.search(query=query, max_results=max_results, include_raw_content=False, include_answer=True)
-    except TypeError:
-        # Some versions might use positional args
-        raw = client.search(query, max_results=max_results, include_raw_content=False, include_answer=True)
+    raw = client.search(
+        query=query, 
+        max_results=max_results, 
+        include_raw_content=False, 
+        include_answer=False,
+        search_depth="advanced",
+        )
 
     results: List[dict] = []
     answer: str = ""
@@ -108,3 +107,9 @@ def tavily_extract(client: "TavilyClient", url_or_urls: Union[str, List[str]]) -
 
     observation = "\n\n".join(lines)
     return observation
+
+if __name__ == "__main__":
+    client = make_tavily_client()
+    query = "What is the capital of France?"
+    observation = tavily_search(client, query)
+    print(observation)
