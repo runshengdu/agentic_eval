@@ -11,6 +11,7 @@ logger = logging.getLogger("react_agent")
 
 def make_anthropic_bedrock_client() -> AnthropicBedrock:
     """Initialize Anthropic Bedrock client using standard AWS envs."""
+    kwargs = {}
     kwargs["aws_region"] = "us-east-1"
     kwargs["aws_access_key"] = os.environ["aws_access_key"]
     kwargs["aws_secret_key"] = os.environ["aws_secret_key"]
@@ -46,18 +47,6 @@ def make_openai_compatible_client(provider: str) -> OpenAI:
         base_url = "https://api.x.ai/v1"
     return OpenAI(api_key=api_key, base_url=base_url)
 
-def _normalize_messages(messages: List[Dict]) -> List[Dict[str, str]]:
-    out: List[Dict[str, str]] = []
-    for m in messages:
-        content = str(m.get("content", ""))
-        if not content.strip():
-            continue
-        role = str(m.get("role", "user")).lower()
-        if role not in ("system", "user", "assistant"):
-            role = "user"
-        out.append({"role": role, "content": content})
-    return out
-
 def call_llm(
     client: Optional[OpenAI],
     messages: List[Dict],
@@ -65,12 +54,40 @@ def call_llm(
     provider: Optional[str] = None,
 ) -> Tuple[str, Optional[Dict[str, int]]]:
     """Call the configured LLM provider."""
-    if provider in ("openai", "gemini", "moonshot", "qwen", "glm", "deepseek","openrouter","xai"):
+    if provider == "openai":
         oa_client = make_openai_compatible_client(provider)
-        msgs = _normalize_messages(messages)
-        kwargs = {"model": model, "messages": msgs}
-        kwargs["temperature"] = 1.0 if ("gpt-5" in model.lower() or "o3" in model.lower()) else 0.0
-        kwargs["extra_body"] = {"thinking": {"type": "disabled"}} if ("glm-4.6" in model.lower()) else None
+        # Responses API for OpenAI: pass system as instructions and user/assistant turns as input messages
+        system_text = "\n\n".join(
+            str(m.get("content", ""))
+            for m in messages
+            if str(m.get("role", "")).lower() == "system" and str(m.get("content", "")).strip()
+        ).strip() or None
+        chat_msgs = [
+            {"role": ("assistant" if str(m.get("role", "")).lower() == "assistant" else "user"), "content": str(m.get("content", ""))}
+            for m in messages
+            if str(m.get("role", "")).lower() in ("user", "assistant") and str(m.get("content", "")).strip()
+        ]
+        kwargs = {"model": model, "input": chat_msgs}
+        kwargs["instructions"] = system_text
+        kwargs["temperature"] = 1.0 if (model and ("gpt-5" in model.lower() or "o3" in model.lower())) else 0.0
+        kwargs["store"]=True
+        kwargs["reasoning"] = {"effort": "low"}
+        resp = oa_client.responses.create(**kwargs)
+        content = getattr(resp, "output_text", None) or ""
+        u = getattr(resp, "usage", None)
+        usage = None
+        if u:
+            pt = int(getattr(u, "prompt_tokens", getattr(u, "input_tokens", 0)) or 0)
+            ct = int(getattr(u, "completion_tokens", getattr(u, "output_tokens", 0)) or 0)
+            tt = int(getattr(u, "total_tokens", pt + ct))
+            usage = {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": tt}
+        return content, usage
+
+    if provider in ("gemini", "moonshot", "qwen", "glm", "deepseek", "openrouter", "xai"):
+        oa_client = make_openai_compatible_client(provider)
+        kwargs = {"model": model, "messages": messages}
+        kwargs["temperature"] = 0
+        kwargs["extra_body"] = {"thinking": {"type": "enabled"}} if ("glm-4.6" in model.lower()) else None
         resp = oa_client.chat.completions.create(**kwargs)
         content = resp.choices[0].message.content or ""
         u = getattr(resp, "usage", None)
@@ -84,7 +101,7 @@ def call_llm(
 
     if provider == "anthropic":
         time.sleep(20)  # 限速：每次调用间隔 20 秒
-        _client = client or make_anthropic_bedrock_client()
+        _client = make_anthropic_bedrock_client()
         system_text = "\n\n".join(
             str(m.get("content", ""))
             for m in messages
@@ -95,13 +112,14 @@ def call_llm(
             for m in messages
             if str(m.get("role", "")).lower() in ("user", "assistant") and str(m.get("content", "")).strip()
         ]
-        temp = 0
+        temp = 1 #set to 1 for thinking mode, 0 for non-thinking mode
         with _client.messages.stream(
             model=model,
+            thinking={"type": "enabled", "budget_tokens": 10000},
             messages=msgs,
             system=system_text,
             temperature=temp,
-            max_tokens=4096,
+            max_tokens=16000
          ) as stream:
             for _ in stream:
                 pass

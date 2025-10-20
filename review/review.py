@@ -169,7 +169,7 @@ def _write_review(out_dir: str, base_name: str, review_obj: Dict[str, str]) -> N
             json.dump(review_obj, f, ensure_ascii=False, indent=2)
         logger.info("Wrote review: %s", out_path)
         logger.info("token usage: %s", review_obj.get("token_usage"))
-        logger.info("___"*50)
+        logger.info("---"*30)
     except Exception as e:
         logger.error("Failed to write review %s: %s", out_path, e)
 
@@ -203,23 +203,27 @@ def run_reviewer() -> None:
     def _call_openai(messages: List[Dict[str, str]], model: str) -> Tuple[str, Optional[Dict[str, int]]]:
         try:
             client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url="https://api.openai.com/v1")
-            raw_resp = client.chat.completions.with_raw_response.create(
+            # Convert messages list to a single input string for the Responses API
+            input_text = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+            raw_resp = client.responses.with_raw_response.create(
                 model=model,
-                messages=messages,
+                input=input_text,
+                reasoning={"effort":"high"},
             )
         except Exception as e:
             raise SystemExit(f"Error: LLM API request failed: {e}")
         # Parse structured response and validate content
         resp = raw_resp.parse()
-        msg = resp.choices[0].message
-        content = (getattr(msg, "content", None) or "").strip()
+        # Responses API: prefer output_text convenience accessor
+        content = (getattr(resp, "output_text", None) or "").strip()
+        # Responses API: token usage is provided under the 'usage' object
         u = getattr(resp, "usage", None)
-        usage: Optional[Dict[str, int]] = None
-        if u:
-            pt = int(getattr(u, "prompt_tokens", 0))
-            ct = int(getattr(u, "completion_tokens", 0))
-            tt = int(getattr(u, "total_tokens", pt + ct))
-            usage = {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": tt}
+        pt = int(getattr(u, "input_tokens", 0) or 0)
+        ct = int(getattr(u, "output_tokens", 0) or 0)
+        tt = int(getattr(u, "total_tokens", pt + ct) or (pt + ct))
+        usage: Optional[Dict[str, int]] = {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": tt}
+        if pt == 0 and ct == 0 and tt == 0:
+            raise SystemExit("Error: Token usage reported as all zeros.")
         return content, usage
 
     # Ensure required inputs exist: CSV in eval and JSON logs in log
@@ -266,9 +270,8 @@ def run_reviewer() -> None:
                 _write_review(out_dir, os.path.splitext(os.path.basename(log_path))[0], review_obj)
                 continue
         except Exception as e:
-            review_obj = {"model_id": model_id, "user_query": user_query, "review": f"LLM quick judge failed: {e}", "token_usage": None}
-            _write_review(out_dir, os.path.splitext(os.path.basename(log_path))[0], review_obj)
-            continue
+            logger.error("Quick judge failed: %s. Log: %s", e, log_path)
+            sys.exit(1)
 
         # Full analysis
         messages = build_reviewer_messages(
@@ -282,7 +285,8 @@ def run_reviewer() -> None:
             content, _usage = _call_openai(messages, model=model_name)
             review_obj = {"model_id": model_id, "user_query": user_query, "review": content, "token_usage": _usage}
         except Exception as e:
-            review_obj = {"model_id": model_id, "user_query": user_query, "review": f"LLM review failed: {e}", "token_usage": None}
+            logger.error("Review failed: %s. Log: %s", e, log_path)
+            sys.exit(1)
         _write_review(out_dir, os.path.splitext(os.path.basename(log_path))[0], review_obj)
     return
 

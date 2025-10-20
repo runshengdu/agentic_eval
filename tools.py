@@ -3,7 +3,9 @@ from typing import List, Union
 from tavily import TavilyClient  
 import os
 from dotenv import load_dotenv
+from summary import summarize_content
 load_dotenv(override=True)
+import tiktoken
 logger = logging.getLogger("react_agent")
 
 def make_tavily_client() -> "TavilyClient":
@@ -24,27 +26,39 @@ def tavily_search(client: "TavilyClient", query: str, max_results: int = 5) -> s
         max_results=max_results, 
         include_raw_content=False, 
         include_answer=False,
-        search_depth="advanced",
+        search_depth="basic",
         )
 
     results: List[dict] = []
-    answer: str = ""
     if isinstance(raw, dict):
         if isinstance(raw.get("results"), list):
             results = raw["results"]
         elif isinstance(raw.get("result"), dict):
             results = [raw["result"]]
-        answer = (raw.get("answer") or "").strip()
     elif isinstance(raw, list):
         results = raw
 
-    logger.debug("TOOL RESULT: name=Tavily.search result_count=%d", len(results))
+    # Filter out results whose URL contains blocked keywords
+    exclude_keywords = ["huggingface.co","huggingface.com","arxiv.org"]
+    filtered_results: List[dict] = []
+    for r in results:
+        url_lower = ((r.get("url") or "").strip().lower())
+        if any(kw in url_lower for kw in exclude_keywords):
+            continue
+        filtered_results.append(r)
+
+    logger.debug(
+        "TOOL RESULT: name=Tavily.search raw_count=%d filtered_count=%d blocked_keywords=%s",
+        len(results),
+        len(filtered_results),
+        ",".join(exclude_keywords),
+    )
 
     lines = ["Search Results:"]
-#    if answer:
-#        lines.append(f"Answer: {answer}")
+    # if answer:
+    #     lines.append(f"Answer: {answer}")
 
-    for idx, r in enumerate(results, start=1):
+    for idx, r in enumerate(filtered_results, start=1):
         title = (r.get("title")).strip()
         url = (r.get("url")).strip()
         content = (r.get("content")).strip()
@@ -89,17 +103,20 @@ def tavily_extract(client: "TavilyClient", url_or_urls: Union[str, List[str]]) -
         len(results),
         failed_count,
     )
-
     lines = ["Extract Results:"]
+    # Create the encoder once and reuse for all items
+    enc = tiktoken.get_encoding("o200k_base")
     for idx, r in enumerate(results, start=1):
         url = (r.get("url") or r.get("link") or "").strip()
         raw_content = (r.get("raw_content") or "").strip()
-        # Fallback to other content fields if raw_content missing
-        if not raw_content:
-            raw_content = (r.get("content") or r.get("snippet") or r.get("description") or "").strip()
-        images = r.get("images") or []
-        favicon = (r.get("favicon") or "").strip()
-        item = f"{idx}. URL: {url}\nImages: {len(images)}\nFavicon: {favicon}\nRaw Content:\n{raw_content}"
+        # Safely compute token count and summarize when content is too long
+        try:
+            token_count = len(enc.encode(raw_content))
+        except Exception:
+            token_count = 0 if not raw_content else len(raw_content)
+        if token_count > 4000:
+            raw_content = summarize_content(raw_content)
+        item = f"{idx}. URL: {url}\nRaw Content:\n{raw_content}"
         lines.append(item)
 
     if len(lines) == 1:
@@ -110,6 +127,6 @@ def tavily_extract(client: "TavilyClient", url_or_urls: Union[str, List[str]]) -
 
 if __name__ == "__main__":
     client = make_tavily_client()
-    query = "What is the capital of France?"
+    query = "huggingface"
     observation = tavily_search(client, query)
     print(observation)

@@ -5,13 +5,12 @@ from openai import OpenAI
 
 load_dotenv()
 
-def summarize_content(raw_text: str, model_name: str = "qwen-flash", source_url: Optional[str] = None) -> str:
+def summarize_content(raw_text: str, model_name: str = "qwen-flash") -> str:
     """
     Summarize raw extracted web content into a concise, factual digest using a single-turn OpenAI-compatible Qwen call.
 
     - Keep key facts, numbers, names, and dates that are likely useful for reasoning.
     - Avoid long quotes; do not include boilerplate, navigation, or ads.
-    - Include the source URL at the end for traceability when available.
     """
     if not raw_text or not raw_text.strip():
         return "(empty content)"
@@ -44,13 +43,12 @@ def summarize_content(raw_text: str, model_name: str = "qwen-flash", source_url:
     )
 
     summary_text = (resp.choices[0].message.content or "").strip()
-    heading = f"This is a summary, you might access the url again to get the complete content, url:{source_url}"
-    return f"{heading}\n{summary_text}"
+    header="url raw content too long, here is the summary:"
+    return f"{header}\n{summary_text}"
 
 
 # write code to test the function
 if __name__ == "__main__":
     raw_text = "The field of 4D world modeling - aiming to jointly capture spatial geometry and temporal dynamics - has witnessed remarkable progress in recent years, driven by advances in large-scale generative models and multimodal learning. However, the development of truly general 4D world models remains fundamentally constrained by the availability of high-quality data. Existing datasets and benchmarks often lack the dynamic complexity, multi-domain diversity, and spatial-temporal annotations required to support key tasks such as 4D geometric reconstruction, future prediction, and camera-control video generation. To address this gap, we introduce OmniWorld, a large-scale, multi-domain, multi-modal dataset specifically designed for 4D world modeling. OmniWorld consists of a newly collected OmniWorld-Game dataset and several curated public datasets spanning diverse domains. Compared with existing synthetic datasets, OmniWorld-Game provides richer modality coverage, larger scale, and more realistic dynamic interactions. Based on this dataset, we establish a challenging benchmark that exposes the limitations of current state-of-the-art (SOTA) approaches in modeling complex 4D environments. Moreover, fine-tuning existing SOTA methods on OmniWorld leads to significant performance gains across 4D reconstruction and video generation tasks, strongly validating OmniWorld as a powerful resource for training and evaluation. We envision OmniWorld as a catalyst for accelerating the development of general-purpose 4D world models, ultimately advancing machines' holistic understanding of the physical world."
     model_name = "qwen-flash"
-    source_url = "https://www.test.com"
-    print(summarize_content(raw_text, model_name, source_url))
+    print(summarize_content(raw_text, model_name))

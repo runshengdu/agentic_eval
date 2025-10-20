@@ -10,6 +10,7 @@ def get_token_limit(model_id: str):
     """
     limits_by_model_id = {
         "gpt-5": 400000,
+        "gpt-5-nano": 400000,
         "gpt-4.1": 1000000,
         "gemini-2.5-flash": 1000000,
         "gemini-2.5-pro": 1000000,
