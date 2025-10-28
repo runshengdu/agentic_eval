@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 from anthropic import AnthropicBedrock
 from openai import OpenAI
 from dotenv import load_dotenv
-load_dotenv(override=True)
+load_dotenv()
 
 logger = logging.getLogger("react_agent")
 
@@ -87,7 +87,7 @@ def call_llm(
         oa_client = make_openai_compatible_client(provider)
         kwargs = {"model": model, "messages": messages}
         kwargs["temperature"] = 0
-        kwargs["extra_body"] = {"thinking": {"type": "enabled"}} if ("glm-4.6" in model.lower()) else None
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}} if ("glm-4.6" in model.lower()) else None
         resp = oa_client.chat.completions.create(**kwargs)
         content = resp.choices[0].message.content or ""
         u = getattr(resp, "usage", None)

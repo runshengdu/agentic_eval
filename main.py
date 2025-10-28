@@ -5,33 +5,21 @@ import argparse
 import logging
 import datetime
 import json
+import csv
+import time
 from typing import Dict, List, Tuple, Optional
 from dotenv import load_dotenv  
+from prompt import SYSTEM_PROMPT
 from llm_api import call_llm  # type: ignore
 from tools import make_tavily_client, tavily_search, tavily_extract  # type: ignore
 from token_limit import get_token_limit  # type: ignore
 
-load_dotenv(override=True)
+load_dotenv()
 
 # Define module-level logger for this module
 logger = logging.getLogger("react_agent")
 
-SYSTEM_PROMPT = ("""You are an autonomous agent that uses web search and page access to solve the user's question.Given the question and the history context, generate the thought as well as the next action (only one action). The completed thought should contain analysis of available information and planning for future steps. Enclose the thought within <plan> </plan> tags. 
-
-Allowed actions:
-1. Search with a search engine, e.g. <search> the search query </search>
-2. Access a URL found earlier, e.g. <access> the url to access </access>
-3. Provide a final answer, e.g. <answer> the answer(should be a short answer) </answer>
-
-Guidelines:
-1. Double-check previous conclusions and identified facts using searches from different perspectives.
-2. Try alternative approaches (different queries, different sources) when progress stalls.
-3. Search results provide URL snippets,you can access those URLs to retrieve full content.
-4. Always put the next action after the thought.
-5. Choose exactly one action.
-6. Use English for your search queries.
-"""
-)
+ 
 
 def _strip_url(u: str) -> str:
     try:
@@ -40,7 +28,7 @@ def _strip_url(u: str) -> str:
         return u
 
 
-def react_answer(question: str, model: Optional[str] = None, provider: Optional[str] = None) -> str:
+def react_answer(question: str, model: Optional[str] = None, provider: Optional[str] = None, retries: int = 3) -> str:
     """
     Core ReAct loop: let the LLM decide to Search via Tavily until it produces a Final Answer and Stop.
     The loop no longer has a step limit; termination is controlled by the model.
@@ -72,11 +60,14 @@ def react_answer(question: str, model: Optional[str] = None, provider: Optional[
     # Initialize JSON logging: use the active_model_name for all providers
     model_id = model
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = os.path.join(os.getcwd(), "log")
+    # Write logs under the project directory regardless of current working dir
+    log_dir = os.path.join(os.path.dirname(__file__), "log")
     os.makedirs(log_dir, exist_ok=True)
     # Sanitize model_id to be Windows filename-safe (replace characters like : <> : \ / | ? * with '-')
     safe_model_id = re.sub(r'[<>:"/\\|?*]+', '-', model_id)
-    log_filename = os.path.join(log_dir, f"{safe_model_id}_{timestamp}.json")
+    log_filename = os.path.join(log_dir, safe_model_id, f"{timestamp}.json")
+    # Ensure the model-specific subdirectory exists (avoid silent write failures)
+    os.makedirs(os.path.dirname(log_filename), exist_ok=True)
     log_data: List[Dict] = []
     log_data.append({"type": "user_query", "content": question.strip()})
     logger.info("[USER_QUERY] %s", question.strip())
@@ -100,8 +91,31 @@ def react_answer(question: str, model: Optional[str] = None, provider: Optional[
                 sys.exit(1)
             return "token consumption reach the threshold, stop the conversation."
         
-        # Call the LLM for the next step
-        reply, usage = call_llm(oa_client, messages, model=model, provider=provider)
+        # Call the LLM for the next step with retry logic
+        attempt = 0
+        last_error: Optional[Exception] = None
+        while True:
+            try:
+                reply, usage = call_llm(oa_client, messages, model=model, provider=provider)
+                break
+            except Exception as e:
+                attempt += 1
+                last_error = e
+                logger.warning("[LLM_CALL_FAILED] attempt=%d/%d error=%s", attempt, retries, e)
+                log_data.append({"type": "llm_error", "step": step, "attempt": attempt, "error": str(e)})
+                if attempt >= max(0, int(retries)):
+                    logger.error("[LLM_CALL_ABORT] exceeded max retries=%d", retries)
+                    # Persist the log before aborting
+                    try:
+                        with open(log_filename, "w", encoding="utf-8") as f:
+                            json.dump(log_data, f, ensure_ascii=False, indent=2)
+                    except Exception as write_err:
+                        logger.error("Failed to write log file '%s': %s", log_filename, write_err)
+                        sys.exit(1)
+                    # Abort the run
+                    sys.exit(1)
+                # Backoff before the next attempt
+                time.sleep(min(10, 1 + attempt * 2))
         # Inline tag parsing: require <plan> then exactly one action tag
         m_plan = re.search(r"(?is)<\s*plan\s*>\s*(.*?)\s*<\s*/\s*plan\s*>", reply or "")
         plan_text = m_plan.group(1).strip() if m_plan else ""
@@ -158,11 +172,13 @@ def react_answer(question: str, model: Optional[str] = None, provider: Optional[
         if kind == "answer" and isinstance(payload, str):
             log_data.append({"type": "answer", "content": payload})
             logger.info("[ANSWER] %s", payload)
+            # Persist logs for this query; if the primary path fails, abort
             try:
                 with open(log_filename, "w", encoding="utf-8") as f:
                     json.dump(log_data, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("Failed to write log file '%s': %s", log_filename, e)
+                sys.exit(1)
             return payload
         elif kind == "search" and isinstance(payload, str):
             query = payload
@@ -192,7 +208,6 @@ def react_answer(question: str, model: Optional[str] = None, provider: Optional[
             # Log the ACCESS tag and record in log data
             logger.info("[ACCESS] %s", url_display)
             log_data.append({"type": "access", "url": url_display})
-            obs_block = f"\n[Access]\nURL: {url_display}\n{raw_text}\n"
             log_data.append({
                 "type": "access_observation_raw",
                 "url": url_display,
@@ -206,10 +221,11 @@ def react_answer(question: str, model: Optional[str] = None, provider: Optional[
 
 
 def main(argv: List[str]) -> int:
-    parser = argparse.ArgumentParser(description="ReAct agent with Tavily and LLM choice")
-    parser.add_argument("--provider", "-p", default="openai", help="LLM provider to use")
-    parser.add_argument("--model_id", "-id", default="gpt-5", help="Model identifier to use")
-    parser.add_argument("--query", "-q", help="User query string to run through the agent")
+    parser = argparse.ArgumentParser(description="Search agent with tools")
+    parser.add_argument("--provider", default="openai", help="LLM provider to use")
+    parser.add_argument("--model-id", default="gpt-5", help="Model identifier to use")
+    parser.add_argument("--query", help="User query string to run through the agent")
+    parser.add_argument("--retries", type=int, default=3, help="Number of retries for failed LLM API calls")
     parser.add_argument("--debug", action="store_true", default=False, help="Enable debug logging output (default: off)")
     args = parser.parse_args(argv[1:])
 
@@ -217,38 +233,36 @@ def main(argv: List[str]) -> int:
     log_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(level=log_level, format="%(message)s")
 
-    # Quiet third-party verbose loggers (expanded)
-    for noisy in (
-        "openai",
-        "httpx",
-        "httpcore",
-        "anthropic",
-        "botocore",
-        "boto3",
-        "s3transfer",
-        "urllib3",
-    ):
-        try:
-            logging.getLogger(noisy).setLevel(logging.WARNING)
-        except Exception:
-            pass
-
-
-    # Collect query and invoke the agent (provider and model id from CLI; no env fallback)
+    # Collect queries and invoke the agent. If no CLI argument is provided,
+    # load problems from the CSV at the specified absolute path.
+    queries: List[str] = []
     if args.query:
-        question = args.query.strip()
+        queries = [args.query.strip()]
     else:
-        # Backward compatibility: allow passing question as positional or fall back to input()
-        if len(argv) > 1:
-            question = " ".join(argv[1:]).strip()
-        else:
-            question = input("Enter your question: ")
+        default_csv = os.path.join(os.path.dirname(__file__), "eval", "browse_comp_sample.csv")
+        try:
+            with open(default_csv, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    q = (row.get("problem") or "").strip()
+                    if q:
+                        queries.append(q)
+            if not queries:
+                print(f"No problems found in CSV: {default_csv}", file=sys.stderr)
+                logger.error("No problems found in CSV: %s", default_csv)
+                sys.exit(1)
+        except Exception as e:
+            print(f"Error reading default CSV '{default_csv}': {e}", file=sys.stderr)
+            logger.error("Error reading default CSV '%s': %s", default_csv, e)
+            sys.exit(1)
 
-    react_answer(
-        question,
-        model=args.model_id,
-        provider=args.provider,
-    )
+    for question in queries:
+        react_answer(
+            question,
+            model=args.model_id,
+            provider=args.provider,
+            retries=args.retries,
+        )
     return 0
 
 

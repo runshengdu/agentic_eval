@@ -72,8 +72,8 @@ def decode_csv(src: Path, dest: Path) -> None:
 
 def main() -> int:
     eval_dir = Path(__file__).parent
-    raw_path = eval_dir / "browse_comp_test_set.csv"
-    decoded_path = eval_dir / "browse_comp_test_set_decoded.csv"
+    raw_path = eval_dir / "browse_comp.csv"
+    decoded_path = eval_dir / "browse_comp_decoded.csv"
 
     try:
         # Always (re)download the raw CSV to ensure freshness

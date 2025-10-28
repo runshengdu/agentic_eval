@@ -4,7 +4,7 @@ from tavily import TavilyClient
 import os
 from dotenv import load_dotenv
 from summary import summarize_content
-load_dotenv(override=True)
+load_dotenv()
 import tiktoken
 logger = logging.getLogger("react_agent")
 
@@ -114,7 +114,7 @@ def tavily_extract(client: "TavilyClient", url_or_urls: Union[str, List[str]]) -
             token_count = len(enc.encode(raw_content))
         except Exception:
             token_count = 0 if not raw_content else len(raw_content)
-        if token_count > 4000:
+        if token_count > 3000:
             raw_content = summarize_content(raw_content)
         item = f"{idx}. URL: {url}\nRaw Content:\n{raw_content}"
         lines.append(item)
