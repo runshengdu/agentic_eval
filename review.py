@@ -166,25 +166,6 @@ def _load_reviewed_user_queries_from_json(review_dir: str) -> Set[str]:
     return collected
 
 
-def _get_log_keywords() -> List[str]:
-    """Resolve log filename filter keywords from env.
-
-    Reads comma-separated `REVIEW_LOG_KEYWORDS` from environment/.env.
-    """
-    raw = os.getenv("REVIEW_LOG_KEYWORDS", "").strip()
-    return [s.strip().lower() for s in raw.split(",") if s.strip()]
-
-
-def _find_log_by_query(log_dir: str, query: str) -> List[Dict]:
-    """Return log entries for the first log whose user_query matches."""
-    for lp in _list_json_files(log_dir):
-        entries = read_log_file(lp)
-        uq, _fa = extract_log_summary(entries)
-        if (uq or "").strip() == (query or "").strip():
-            return entries
-    return []
-
-
 def _write_review(out_dir: str, base_name: str, review_obj: Dict[str, str]) -> None:
     """Write the review object immediately to the review directory."""
     out_name = base_name + "-review.json"
